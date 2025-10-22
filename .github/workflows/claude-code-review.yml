@@ -30,12 +30,12 @@ jobs:
       pull-requests: write
       issues: write
       id-token: write
-      actions: read # Required for Claude to read CI results on PRs
+      actions: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Run Claude Code
         id: claude
@@ -44,26 +44,67 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           prompt: |
             # コードレビューガイドライン
-            ## 概要
-            あなたの役割は、非常に経験豊富なソフトウェアエンジニアとして、コードの一部を徹底的にレビューし、以下の観点から問題を検出し、具体的な改善案を提供することです：
+
+            あなたは経験豊富なソフトウェアエンジニアとして、Pull Request に含まれるコードをレビューします。
+            対象は**駆け出しエンジニアが作成したコード**であり、主に「コードが正しく動作するか」に焦点を当ててください。
+
+            ---
+            ## 🚫 禁止事項
+            - 絶対に**具体的なコード例や修正コード**を出力しないでください。
+            - レビューコメントは常に**抽象的な指摘や方向性**に留めてください。
+
+            ---
+            ## 🔍 レビュー観点
 
             ### 重要度：高（必ず指摘）
-              - **動作しないコード**: 構文エラー、未定義変数、型エラー、ヌルポインタ参照の可能性
-              - **ロジックエラー**: 無限ループ、到達不可能なコード、条件分岐の誤り
-              - **セキュリティ脆弱性**: SQLインジェクション、XSS、CSRF、認証・認可の問題
-              - **重大なパフォーマンス問題**: N+1クエリ、メモリリーク、非効率なアルゴリズム
-              - **データ競合**: 競合状態、デッドロック、不適切な並行処理
+            - **動作しないコード**
+              - 構文エラー、未定義メソッド、型ミスマッチ、マイグレーション不整合など
+            - **ロジックエラー**
+              - 無限ループ、条件分岐の誤り、境界値処理ミスなど
 
-            ### レビュー方針
-              - コードが正しく動作するかを最優先で判定してください
-              - 軽微なコードスタイルの問題は無視してください
-              - 「問題ありません」のようなコメントは避けてください
+            ### 優先度の低い項目（コメント不要）
+            - インデントや改行などの軽微なスタイル
+            - コメントの有無や命名規則の細部
 
+            ---
+            ## 🧭 レビュー方針
+            - 「コードが正しく動作するか」を最優先で判定する。
+            - コードのスタイルや最適化は優先しない。
+            - テスト結果や明らかなエラーに基づいて判断する。
+            - 目的は**動作確認に基づいたレビュー**であること。
 
-            ## 望んでいるレビューの出力結果
+            ---
+            ## 🧾 出力フォーマット（この形式を厳守）
+            - あなたの最終出力は、必ず以下のテキストにしてください。
+              例：
+                - 結論: success
 
-            最終的にコードが動くアプリケーションになっているか、Markdown形式でPRにコメントを追加してください。
-            - 動作しないコードやロジックエラーがないか
-            - Ruby on Railsベストプラクティスに従っているか
-            - 各項目について、問題があれば具体的に指摘し、なければ「問題ありません」と記載してください。
-            - 「```」のコードブロックは不要です。
+            ---
+            ## ✅ 結論
+            コードが動いていたらsuccess, 失敗していたらfailureのテキストだけを返してください。
+
+      - name: Parse Claude Execution File and Check Conclusion
+        id: parse_and_fail
+        run: |
+          EXECUTION_FILE="${{ steps.claude.outputs.execution_file }}"
+
+          echo "=== Claude Execution File (RAW) ==="
+          cat "$EXECUTION_FILE"
+          echo "==================================="
+
+          RESULT=$(cat "$EXECUTION_FILE" | jq -r '.[] | select(.type=="result") | .result')
+          CONCLUSION=$(echo "$RESULT" | grep -Eo '(結論|conclusion)\s*[:：]\s*(success|failure)' | grep -Eo '(success|failure)')
+          echo "=== Extracted Conclusion ==="
+          echo "$CONCLUSION"
+          echo "========================"
+
+          # 結論が 'failure' なら、非ゼロの終了コードを返してジョブを失敗させる
+          if [ "$CONCLUSION" = "failure" ]; then
+            echo "🔴 レビュー結果が 'failure' です。このジョブを失敗としてマークします。"
+            exit 1
+          elif [ "$CONCLUSION" = "success" ]; then
+            echo "🟢 レビュー結果が 'success' です。処理を続行します。"
+          else
+            echo "⚠️ 結論の値が 'success' または 'failure' ではありません: $CONCLUSION"
+            exit 1
+          fi
