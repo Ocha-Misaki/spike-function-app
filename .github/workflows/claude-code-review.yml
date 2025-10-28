@@ -76,29 +76,95 @@ jobs:
             ---
             ## 🧾 出力フォーマット（この形式を厳守）
             - あなたの最終出力は、必ず以下のテキストにしてください。
+            - もしコードに指摘事項がない場合は、「結論: success」のみを出力してください。
               例：
                 - 結論: success
+                - レビュー結果:
+                    ---
+                    file: app/controllers/posts_controller.rb
+                    line: 12
+                    comment: createアクションでストロングパラメータが定義されていますが使用されていません。
+
+                    ---
+                    file: app/controllers/posts_controller.rb
+                    line: 25
+                    comment: 保存処理のエラーハンドリングが不足しています。saveがfalseの場合の処理を追加してください。
+
+                    ---
+                    file: app/controllers/posts_controller.rb
+                    line: 42
+                    comment: showアクションでパラメータ名が誤っています。
 
             ---
             ## ✅ 結論
-            コードが動いていたらsuccess, 失敗していたらfailureのテキストだけを返してください。
+            - コードが動いていたらsuccess, 失敗していたらfailureのテキストを返してください。
+            - 各指摘を「file」「line」「comment」形式で出力してください。
+
+      - name: Extract and Comment PR Review
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+
+            const executionFile = '${{ steps.claude.outputs.execution_file }}';
+            const executionLog = JSON.parse(fs.readFileSync(executionFile, 'utf8'));
+            const prNumber = context.payload.pull_request?.number || context.issue.number;
+
+            let comments = [];
+
+            for (let i = executionLog.length - 1; i >= 0; i--) {
+              const logEntry = executionLog[i];
+              const message = logEntry.message;
+              if (message && message.role === 'assistant') {
+                const content = message.content;
+                const textParts = content
+                  .filter(part => part.type === 'text' && typeof part.text === 'string' && part.text.trim().length > 0)
+                  .map(part => part.text)
+                  .join('\n\n');
+              console.log("Claude output text parts:", textParts);
+
+                // Claudeの出力を解析
+                const regex = /[-–—]{3,}[\r\n]+[\s-]*file:\s*(.+)[\r\n]+[\s-]*line:\s*(\d+)[\r\n]+[\s-]*comment:\s*([\s\S]*?)(?=(?:[-–—]{3,}|$))/g;
+                let match;
+                while ((match = regex.exec(textParts)) !== null) {
+                  const [_, file, line, body] = match;
+                  comments.push({
+                    path: file.trim(),
+                    line: parseInt(line.trim(), 10),
+                    body: body.trim()
+                  });
+                }
+                break;
+              }
+            }
+
+            if (comments.length === 0) {
+              console.log("No structured comments found in Claude output");
+              console.log("Extracted text was:\n", textParts);
+              return;
+            }
+
+            console.log("Posting review comments:", comments);
+
+            // PRレビューコメントを一括投稿
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+              event: "COMMENT",
+              body: "### Claude 自動コードレビュー結果\n\n以下のファイルにコメントを投稿しました。",
+              comments
+            });
 
       - name: Parse Claude Execution File and Check Conclusion
         id: parse_and_fail
         run: |
           EXECUTION_FILE="${{ steps.claude.outputs.execution_file }}"
 
-          echo "=== Claude Execution File (RAW) ==="
-          cat "$EXECUTION_FILE"
-          echo "==================================="
-
           RESULT=$(cat "$EXECUTION_FILE" | jq -r '.[] | select(.type=="result") | .result')
           CONCLUSION=$(echo "$RESULT" | grep -Eo '(結論|conclusion)\s*[:：]\s*(success|failure)' | grep -Eo '(success|failure)')
-          echo "=== Extracted Conclusion ==="
-          echo "$CONCLUSION"
-          echo "========================"
 
-          # 結論が 'failure' なら、非ゼロの終了コードを返してジョブを失敗させる
           if [ "$CONCLUSION" = "failure" ]; then
             echo "🔴 レビュー結果が 'failure' です。このジョブを失敗としてマークします。"
             exit 1
