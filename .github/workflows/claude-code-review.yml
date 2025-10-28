@@ -122,7 +122,6 @@ jobs:
                   .filter(part => part.type === 'text' && typeof part.text === 'string' && part.text.trim().length > 0)
                   .map(part => part.text)
                   .join('\n\n');
-              console.log("Claude output text parts:", textParts);
 
                 // Claudeの出力を解析
                 const regex = /[-–—]{3,}[\r\n]+[\s-]*file:\s*(.+)[\r\n]+[\s-]*line:\s*(\d+)[\r\n]+[\s-]*comment:\s*([\s\S]*?)(?=(?:[-–—]{3,}|$))/g;
@@ -141,7 +140,6 @@ jobs:
 
             if (comments.length === 0) {
               console.log("No structured comments found in Claude output");
-              console.log("Extracted text was:\n", textParts);
               return;
             }
 
