@@ -139,11 +139,14 @@ jobs:
             }
 
             if (comments.length === 0) {
-              console.log("No structured comments found in Claude output");
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: "### Claude 自動コードレビュー結果\n\nコードに問題は見つかりませんでした。お疲れ様でした!"
+              });
               return;
             }
-
-            console.log("Posting review comments:", comments);
 
             // PRレビューコメントを一括投稿
             await github.rest.pulls.createReview({
